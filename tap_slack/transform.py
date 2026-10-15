@@ -1,9 +1,14 @@
+from datetime import datetime, timezone
 
 
 def decimal_timestamp_to_utc_timestamp(timestamp):
-    # Some timestamps returned by the Slack API are in the format of `Seconds.Milliseconds`
-    # and this takes only the `Seconds` part of that timestamp.
-    return timestamp.partition(".")[0]
+    # Some timestamps returned by the Slack API are in the format of `Seconds.Microseconds`.
+    # Keep the microseconds: a message's `ts` is its unique id within a channel, so dropping
+    # them makes different messages posted in the same second share the same primary key.
+    seconds, _, fraction = timestamp.partition(".")
+    parsed = datetime.fromtimestamp(int(seconds), tz=timezone.utc) \
+        .replace(microsecond=int(fraction.ljust(6, "0")[:6]))
+    return parsed.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def transform_json(stream, data, date_fields, channel_id=None):

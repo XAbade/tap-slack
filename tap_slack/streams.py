@@ -378,6 +378,12 @@ class ThreadsStream(SlackStream):
     valid_replication_keys = ['updated_at']
     date_fields = ['ts', 'last_read']
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # A thread can be requested more than once per sync (e.g. via its parent message and
+        # again via a reply broadcast to the channel), so track what was already written.
+        self.synced_keys = set()
+
     def sync(self, mdata, channel_id, ts):
         schema = self.load_schema()
         start, end = self.get_absolute_date_range(self.config.get('start_date'))
@@ -403,6 +409,10 @@ class ThreadsStream(SlackStream):
                             transformed_record = transformer.transform(data=message, schema=schema,
                                                                        metadata=metadata.to_map(
                                                                            mdata))
+                            key = tuple(transformed_record.get(k) for k in self.key_properties)
+                            if key in self.synced_keys:
+                                continue
+                            self.synced_keys.add(key)
                             if self.write_to_singer:
                                 singer.write_record(stream_name=self.name,
                                                     time_extracted=singer.utils.now(),
