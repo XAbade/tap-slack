@@ -21,8 +21,7 @@ def auto_join(client, config):
                 LOGGER.error('Error joining {}, Reason: {}'.format(conversation_id, error))
                 raise Exception('{}: {}'.format(conversation_id, error))
     else:
-        response = client.get_all_channels(types="public_channel", exclude_archived="true")
-        conversations = response.get("channels", [])
+        conversations = client.get_all_channels(types="public_channel", exclude_archived="true")
 
         for conversation in conversations:
             conversation_id = conversation.get("id", None)

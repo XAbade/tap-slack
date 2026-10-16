@@ -93,13 +93,10 @@ class SlackStream:
         if enable_private_channels == "true":
             types = "public_channel,private_channel"
 
-        conversations_list = self.client.get_all_channels(types=types,
-                                                          exclude_archived=exclude_archived)
-
-        for page in conversations_list:
-            channels = page.get('channels')
-            for channel in channels:
-                yield channel
+        channels = self.client.get_all_channels(types=types, exclude_archived=exclude_archived)
+        for channel in channels:
+            # A copy, since the list is shared between streams and transforms change records
+            yield dict(channel)
 
     def _specified_channels(self):
         for channel_id in self.config.get("channels"):
