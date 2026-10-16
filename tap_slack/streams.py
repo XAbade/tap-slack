@@ -231,6 +231,7 @@ class ConversationHistoryStream(SlackStream):
                 threads_mdata = catalog_entry.metadata
                 threads_stream = ThreadsStream(client=self.client, config=self.config,
                                                catalog=self.catalog, state=self.state)
+                threads_stream.write_schema()
 
         # pylint: disable=unused-variable
         with singer.metrics.job_timer(job_type='list_conversation_history') as timer:
@@ -268,13 +269,21 @@ class ConversationHistoryStream(SlackStream):
                                 if threads_stream:
                                     # If threads is selected we need to sync all the
                                     # threaded replies to this message
-                                    threads_stream.write_schema()
                                     try:
-                                        threads_stream.sync(mdata=threads_mdata,
-                                                            channel_id=channel_id,
-                                                            ts=data.get('thread_ts'),
-                                                            start=start,
-                                                            end=end)
+                                        if data.get('reply_count'):
+                                            threads_stream.sync(mdata=threads_mdata,
+                                                                channel_id=channel_id,
+                                                                ts=data.get('thread_ts'),
+                                                                start=start,
+                                                                end=end)
+                                        else:
+                                            # Without replies the thread is just this message,
+                                            # so skip the (rate limited) conversations.replies call
+                                            threads_stream.write_messages(
+                                                mdata=threads_mdata,
+                                                channel_id=channel_id,
+                                                messages=[{**message,
+                                                           'ts': data.get('thread_ts')}])
                                         threads_stream.write_state()
                                     except:
                                         #Skip the thread on error
@@ -388,26 +397,35 @@ class ThreadsStream(SlackStream):
                                                  latest=int(end.timestamp()))
 
                 for page in replies:
-                    transformed_threads = transform_json(stream=self.name,
-                                                         data=page.get('messages', []),
-                                                         date_fields=self.date_fields,
-                                                         channel_id=channel_id)
-                    for message in transformed_threads:
-                        with singer.Transformer(
-                                integer_datetime_fmt="unix-seconds-integer-datetime-parsing") \
-                                as transformer:
-                            transformed_record = transformer.transform(data=message, schema=schema,
-                                                                       metadata=metadata.to_map(
-                                                                           mdata))
-                            key = tuple(transformed_record.get(k) for k in self.key_properties)
-                            if key in self.synced_keys:
-                                continue
-                            self.synced_keys.add(key)
-                            if self.write_to_singer:
-                                singer.write_record(stream_name=self.name,
-                                                    time_extracted=singer.utils.now(),
-                                                    record=transformed_record)
-                                counter.increment()
+                    self.write_messages(mdata=mdata, channel_id=channel_id,
+                                        messages=page.get('messages', []), counter=counter,
+                                        schema=schema)
+
+    def write_messages(self, mdata, channel_id, messages, counter=None, schema=None):
+        """
+        Writes thread messages as returned by conversations.replies (raw Slack `ts`).
+        """
+        schema = schema or self.load_schema()
+        transformed_threads = transform_json(stream=self.name,
+                                             data=messages,
+                                             date_fields=self.date_fields,
+                                             channel_id=channel_id)
+        for message in transformed_threads:
+            with singer.Transformer(
+                    integer_datetime_fmt="unix-seconds-integer-datetime-parsing") \
+                    as transformer:
+                transformed_record = transformer.transform(data=message, schema=schema,
+                                                           metadata=metadata.to_map(mdata))
+                key = tuple(transformed_record.get(k) for k in self.key_properties)
+                if key in self.synced_keys:
+                    continue
+                self.synced_keys.add(key)
+                if self.write_to_singer:
+                    singer.write_record(stream_name=self.name,
+                                        time_extracted=singer.utils.now(),
+                                        record=transformed_record)
+                    if counter:
+                        counter.increment()
 
 
 # UserGroupsStream = Slack User Groups
