@@ -25,6 +25,7 @@ class TapSlack(Tap):
         th.Property("channels", th.ArrayType(th.StringType)),
         th.Property("private_channels", th.StringType),
         th.Property("exclude_archived", th.StringType),
+        th.Property("skip_archived_on_incremental", th.CustomType({"type": ["boolean", "string"]})),
         th.Property("join_public_channels", th.StringType),
         th.Property("refresh_token", th.StringType),
         th.Property("expires_in", th.IntegerType),

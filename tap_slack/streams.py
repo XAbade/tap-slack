@@ -105,6 +105,27 @@ class SlackStream:
         for channel_id in self.config.get("channels"):
             yield self.client.get_channel(include_num_members=0, channel=channel_id)
 
+    def is_synced_archived_channel(self, channel, last_sync_date):
+        """
+        With `skip_archived_on_incremental` on, an archived channel is skipped once it was
+        archived (its last `updated` time) before `last_sync_date`: it can't change anymore and
+        that sync already captured its final state. Without a `last_sync_date` (first sync)
+        every channel is synced.
+        """
+        flag = self.config.get('skip_archived_on_incremental', False)
+        if not (flag is True or str(flag).lower() == 'true'):
+            return False
+        if not channel.get('is_archived') or not last_sync_date:
+            return False
+        updated = channel.get('updated')
+        if not updated:
+            LOGGER.warning(f"Archived channel {channel.get('id')} has no `updated` time, "
+                           f"syncing it")
+            return False
+        # Slack sends `updated` in milliseconds
+        updated_seconds = updated / 1000 if updated > 1e11 else updated
+        return strptime_to_utc(last_sync_date).timestamp() >= updated_seconds
+
     def channels(self):
         if "channels" in self.config:
             yield from self._specified_channels()
@@ -123,12 +144,19 @@ class ConversationsStream(SlackStream):
 
     def sync(self, mdata):
         schema = self.load_schema()
+        last_sync_date = singer.get_bookmark(state=self.state, tap_stream_id=self.name,
+                                             key='last_sync_date')
+        sync_started = utils.now()
 
         # pylint: disable=unused-variable
         with singer.metrics.job_timer(job_type='list_conversations') as timer:
             with singer.metrics.record_counter(endpoint=self.name) as counter:
                 channels = self.channels()
                 for channel in channels:
+                    if self.is_synced_archived_channel(channel, last_sync_date):
+                        LOGGER.info(f"Skipping archived channel {channel.get('id')}, "
+                                    f"already synced")
+                        continue
                     transformed_channel = transform_json(stream=self.name, data=[channel],
                                                          date_fields=self.date_fields)
                     with singer.Transformer(
@@ -141,6 +169,10 @@ class ConversationsStream(SlackStream):
                                                 time_extracted=singer.utils.now(),
                                                 record=transformed_record)
                             counter.increment()
+
+        self.state = singer.write_bookmark(state=self.state, tap_stream_id=self.name,
+                                           key='last_sync_date',
+                                           val=utils.strftime(sync_started))
 
 
 # ConversationsMembersStream = Slack Channel Members (Users)
@@ -238,6 +270,13 @@ class ConversationHistoryStream(SlackStream):
             with singer.metrics.record_counter(endpoint=self.name) as counter:
                 for channel in self.channels():
                     channel_id = channel.get('id')
+
+                    # The channel's own bookmark is when its messages were last synced
+                    last_sync_date = ((self.state or {}).get('bookmarks', {})
+                                      .get(self.name) or {}).get(channel_id)
+                    if self.is_synced_archived_channel(channel, last_sync_date):
+                        LOGGER.info(f"Skipping archived channel {channel_id}, already synced")
+                        continue
 
                     bookmark_date = self.get_bookmark(channel_id, self.config.get('start_date'))
                     start, end = self.get_absolute_date_range(bookmark_date)
