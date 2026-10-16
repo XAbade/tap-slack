@@ -160,8 +160,8 @@ class SlackClient(object):
                           giveup=wait,
                           interval=0,
                           on_backoff=log_backoff_attempt)
-    def get_files(self, from_ts, to_ts):
-        return self.webclient.files_list(from_ts=from_ts, to_ts=to_ts)
+    def get_files(self, ts_from, ts_to, page=1):
+        return self.webclient.files_list(ts_from=ts_from, ts_to=ts_to, page=page)
 
     @backoff.on_exception(backoff.constant,
                           (SlackApiError, TimeoutError),
@@ -170,8 +170,8 @@ class SlackClient(object):
                           giveup=wait,
                           interval=0,
                           on_backoff=log_backoff_attempt)
-    def get_remote_files(self, from_ts, to_ts):
-        return self.webclient.files_remote_list(from_ts=from_ts, to_ts=to_ts)
+    def get_remote_files(self, ts_from, ts_to):
+        return self.webclient.files_remote_list(ts_from=ts_from, ts_to=ts_to)
 
     @backoff.on_exception(backoff.constant,
                           (SlackApiError, TimeoutError),
