@@ -5,7 +5,7 @@ import singer
 from singer import metadata, utils
 from singer.utils import strptime_to_utc
 
-from tap_slack.transform import transform_json
+from tap_slack.transform import raw_ts, transform_json
 
 LOGGER = singer.get_logger()
 DATETIME_FORMAT = '%Y-%m-%dT%H:%M:%S'
@@ -291,11 +291,14 @@ class ConversationHistoryStream(SlackStream):
 
                         for page in messages:
                             messages = page.get('messages')
+                            # Slack's own `ts` of every message, taken before the transform
+                            # turns `ts` into a datetime (`thread_ts` is the parent's ts).
+                            own_ts = [raw_ts(message) for message in messages]
                             transformed_messages = transform_json(stream=self.name,
                                                                   data=messages,
                                                                   date_fields=self.date_fields,
                                                                   channel_id=channel_id)
-                            for message in transformed_messages:
+                            for message, message_ts in zip(transformed_messages, own_ts):
                                 data = {'channel_id': channel_id}
                                 data = {**data, **message}
 
@@ -309,7 +312,7 @@ class ConversationHistoryStream(SlackStream):
                                         if data.get('reply_count'):
                                             threads_stream.sync(mdata=threads_mdata,
                                                                 channel_id=channel_id,
-                                                                ts=data.get('thread_ts'),
+                                                                ts=message_ts,
                                                                 start=start,
                                                                 end=end)
                                         else:
@@ -318,13 +321,12 @@ class ConversationHistoryStream(SlackStream):
                                             threads_stream.write_messages(
                                                 mdata=threads_mdata,
                                                 channel_id=channel_id,
-                                                messages=[{**message,
-                                                           'ts': data.get('thread_ts')}])
+                                                messages=[{**message, 'ts': message_ts}])
                                         threads_stream.write_state()
                                     except:
                                         #Skip the thread on error
                                         LOGGER.exception(
-                                            f"Failed to sync thread {data.get('thread_ts')}"
+                                            f"Failed to sync thread {message_ts}"
                                         )
 
                                 with singer.Transformer(
@@ -336,10 +338,7 @@ class ConversationHistoryStream(SlackStream):
                                         schema=schema,
                                         metadata=metadata.to_map(mdata)
                                     )
-                                    record_timestamp = \
-                                        transformed_record.get('thread_ts', '').partition('.')[
-                                            0]
-                                    record_timestamp_int = int(record_timestamp)
+                                    record_timestamp_int = int(message_ts.partition('.')[0])
                                     if record_timestamp_int >= start.timestamp():
                                         if self.write_to_singer:
                                             singer.write_record(stream_name=self.name,
